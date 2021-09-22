@@ -1,19 +1,23 @@
 
-use litem::template;
+#[litem::template("tests/clicker.html", escape="html")]
+pub struct ClickerTmpl<'a> {
+    num: u32,
+    text: &'a str,
+}
 
-#[template("tests/test.html", escape="html")]
-pub struct TestTmpl {
-    hello: String,
-    nums: Vec<u32>,
-    raw: String,
+#[litem::template("tests/test.html", escape="html")]
+pub struct TestTmpl<'a> {
+    hello: &'a str,
+    nums: &'a [u32],
+    raw: &'a str,
 }
 
 #[test]
 fn test() {
     let rendered = TestTmpl {
-        hello: "litem! <script>alert('hacked!')</script>".to_string(),
-        nums: vec![5, 2, 77, 34, 6823],
-        raw: "<b>this is bold!</b>".to_string()
+        hello: "litem! <script>alert('hacked!')</script>",
+        nums: &[5, 2, 77, 34, 6823],
+        raw: "<b>this is bold!</b>"
     }.render_string().unwrap();
     println!("{}", rendered);
 }

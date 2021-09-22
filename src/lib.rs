@@ -42,13 +42,21 @@
 //! #### `block`
 //! You can use `{:block}` / `{:end}` to create a separate scope for variables, in case you don't want
 //! symbols leaking into the surrounding scope.
+//!
+//! #### `include`
+//! Use `{:include EXPR}`, where `EXPR` is a litem template, to include one template inside of another.
+//!
+//! ### Raw Text
+//! `{# RAW TEXT }` will be substituted with `{ RAW TEXT }`. Braces in `RAW TEXT` will be ignored by the transpiler.
+//! This is especially useful when surrounding blocks of CSS.
 extern crate proc_macro;
 
-use proc_macro::TokenStream;
+use proc_macro2::TokenStream;
 use quote::quote;
 use syn;
 use syn::parse::Parse;
 use syn::parse_macro_input;
+use std::borrow::Cow;
 use std::str::FromStr;
 
 /// Generates functions for rendering a template.
@@ -75,7 +83,7 @@ use std::str::FromStr;
 /// pub fn render_string(&self) -> io::Result<String>;
 /// ```
 #[proc_macro_attribute]
-pub fn template(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn template(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let item = parse_macro_input!(item as syn::ItemStruct);
     let attr = parse_macro_input!(attr as syn::AttributeArgs);
 
@@ -114,12 +122,12 @@ pub fn template(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     let escape_func = match escape.as_str() {
-        "txt" => |s: syn::Expr| -> TokenStream { (quote! { #s }).into() },
+        "txt" => |s: syn::Expr| -> TokenStream { (quote! { #s }) },
         "html" => |s: syn::Expr| -> TokenStream {
             let q = quote! {
                 ::std::string::ToString::to_string(&(#s)).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             };
-            q.into()
+            q
         },
         _ => panic!("#[template]: unknown escape type: {}", escape)
     };
@@ -144,7 +152,7 @@ pub fn template(attr: TokenStream, item: TokenStream) -> TokenStream {
                         write!(writer, "{}", #expr)?;
                     }.into());
                 } else {
-                    let tokens: proc_macro2::TokenStream = escape_func(expr).into();
+                    let tokens = escape_func(expr);
                     vecs[last].push(quote! {
                         write!(writer, "{}", #tokens)?;
                     }.into());
@@ -155,7 +163,7 @@ pub fn template(attr: TokenStream, item: TokenStream) -> TokenStream {
                 vecs[last].push(stmt.into_iter()
                     .chain(
                         std::array::IntoIter::new([
-                            proc_macro::Punct::new(';', proc_macro::Spacing::Alone).into()
+                            proc_macro2::Punct::new(';', proc_macro2::Spacing::Alone).into()
                         ])
                     )
                     .collect::<TokenStream>());
@@ -169,8 +177,8 @@ pub fn template(attr: TokenStream, item: TokenStream) -> TokenStream {
                 let vec = vecs.pop().expect("unmatched {:end} node");
                 let last = vecs.len()-1;
                 vecs[last].push(
-                    <std::array::IntoIter<proc_macro::TokenTree, 1>>::new([
-                        proc_macro::Group::new(proc_macro::Delimiter::Brace, vec.into_iter().collect()).into()
+                    <std::array::IntoIter<proc_macro2::TokenTree, 1>>::new([
+                        proc_macro2::Group::new(proc_macro2::Delimiter::Brace, vec.into_iter().collect()).into()
                     ])
                     .collect()
                 );
@@ -179,8 +187,8 @@ pub fn template(attr: TokenStream, item: TokenStream) -> TokenStream {
                 let vec = vecs.pop().expect("unmatched {:end} node");
                 let last = vecs.len()-1;
                 vecs[last].push(
-                    <std::array::IntoIter<proc_macro::TokenTree, 1>>::new([
-                        proc_macro::Group::new(proc_macro::Delimiter::Brace, vec.into_iter().collect()).into()
+                    <std::array::IntoIter<proc_macro2::TokenTree, 1>>::new([
+                        proc_macro2::Group::new(proc_macro2::Delimiter::Brace, vec.into_iter().collect()).into()
                     ])
                     .collect()
                 );
@@ -191,14 +199,16 @@ pub fn template(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }
     let code = vecs.into_iter().next().expect("unmatched {:end} node").into_iter().collect::<TokenStream>();
-    let code: proc_macro2::TokenStream = code.into();
 
     let item_ = item.clone();
     let name = item.ident;
+
+    let (impl_gen, type_gen, where_clause) = item.generics.split_for_impl();
+
     let q = quote! {
         #item_
 
-        impl #name {
+        impl #impl_gen #name #type_gen #where_clause {
             pub fn render(&self, writer: &mut impl ::std::io::Write) -> ::std::io::Result<()> {
                 #code
                 Ok(())
@@ -235,7 +245,7 @@ impl<'i> Iterator for PartIterator<'i> {
     fn next(&mut self) -> Option<Part> {
         let tok = self.0.next()?; 
         Some(match tok {
-            Token::Text(t) => Part::Text(t.to_owned()),
+            Token::Text(t) => Part::Text(t.into_owned()),
             Token::Expr(t, raw) => {
                 let expr = syn::parse_str(t).unwrap();
                 Part::Expr(expr, raw)
@@ -243,7 +253,7 @@ impl<'i> Iterator for PartIterator<'i> {
             Token::Stmt(t) => {
                 let tokens = TokenStream::from_str(t).unwrap();
                 match tokens.clone().into_iter().next() {
-                    Some(proc_macro::TokenTree::Ident(ident)) => {
+                    Some(proc_macro2::TokenTree::Ident(ident)) => {
                         match ident.to_string().as_str() {
                             "for" | "if" | "match" | "while" | "loop" => {
                                 Part::GroupStart(tokens)
@@ -256,8 +266,8 @@ impl<'i> Iterator for PartIterator<'i> {
                                      tokens.into_iter().skip(1)
                                         .chain(
                                             std::array::IntoIter::new([
-                                                proc_macro::Punct::new('=', proc_macro::Spacing::Joint).into(),
-                                                proc_macro::Punct::new('>', proc_macro::Spacing::Alone).into(),
+                                                proc_macro2::Punct::new('=', proc_macro2::Spacing::Joint).into(),
+                                                proc_macro2::Punct::new('>', proc_macro2::Spacing::Alone).into(),
                                             ])
                                         )
                                         .collect())
@@ -267,6 +277,13 @@ impl<'i> Iterator for PartIterator<'i> {
                             },
                             "end" => {
                                 Part::GroupEnd
+                            },
+                            "include" => {
+                                let tokens = tokens.into_iter().skip(1).collect::<TokenStream>();
+
+                                Part::Stmt(quote! {
+                                    (#tokens).render(writer)?
+                                })
                             },
                             _ => Part::Stmt(tokens)
                         }
@@ -283,7 +300,7 @@ impl<'i> Iterator for PartIterator<'i> {
 
 #[derive(Clone, Debug)]
 enum Token<'i> {
-    Text(&'i str),
+    Text(Cow<'i, str>),
     Expr(&'i str, bool),
     Stmt(&'i str),
 }
@@ -349,8 +366,9 @@ impl<'i> Iterator for TokenIterator<'i> {
         Some(match (first, second) {
             ('{', Some(':')) => Token::Stmt(&span[2..span.len()-1]),
             ('{', Some('@')) => Token::Expr(&span[2..span.len()-1], true),
+            ('{', Some('#')) => Token::Text(format!("{}{}", "{", &span[2..span.len()]).into()),
             ('{', _) => Token::Expr(&span[1..span.len()-1], false),
-            _ => Token::Text(span) 
+            _ => Token::Text(span.into()) 
         })
     }
 }
