@@ -132,7 +132,8 @@ pub fn template(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) ->
         _ => panic!("#[template]: unknown escape type: {}", escape)
     };
 
-    let template = std::fs::read_to_string(env!("CARGO_MANIFEST_DIR").to_owned() + "/" + &path).unwrap();
+    let path = env!("CARGO_MANIFEST_DIR").to_owned() + "/" + &path;
+    let template = std::fs::read_to_string(path.to_string()).expect(&format!("No file found: {}", path));
     let parts = PartIterator(TokenIterator::new(&template));
     let mut vecs: Vec<Vec<TokenStream>> = vec![vec![]];
     for part in parts {
